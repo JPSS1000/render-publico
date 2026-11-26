@@ -8,3 +8,8 @@ Mesmo render HyperFrames do render-nuvem, mas num repo público (Actions sem cot
    Se o juntar falhar: `... <id> <nome> <pasta> --blocos` e junta com ffmpeg concat.
 
 Nunca colocar arquivo destrancado no repo, nem dar print/echo da senha no workflow.
+
+## Colab (Whisper / rembg com GPU) — precisa do Jonathan clicar
+1. `python empacotar_colab.py <nome> <arquivos ou pasta>` (sobe trancado como release colab-<nome>)
+2. Jonathan abre https://colab.research.google.com/github/JPSS1000/render-publico/blob/main/colab.ipynb, põe NOME e MODO, Executar tudo.
+3. Baixa `colab-<nome>.zip` na pasta Downloads: `<arquivo>.palavras.json` (palavra/ini/fim) e `.txt` no Whisper; `.png` sem fundo no rembg.
