@@ -1,0 +1,93 @@
+name: render-hyperframes
+# Repo PUBLICO: o pacote chega trancado (AES-256, senha no segredo SENHA) e os blocos/video saem trancados.
+on:
+  workflow_dispatch:
+    inputs:
+      trabalho:
+        description: 'nome do pacote (release trabalho-<nome>, pacote.bin trancado)'
+        required: true
+      partes:
+        description: 'em quantos blocos paralelos dividir'
+        default: '20'
+      versao:
+        description: 'versao do hyperframes'
+        default: '0.9.96'
+jobs:
+  plano:
+    runs-on: ubuntu-latest
+    outputs:
+      blocos: ${{ steps.p.outputs.blocos }}
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          SENHA: ${{ secrets.SENHA }}
+        run: |
+          gh release download "trabalho-${{ inputs.trabalho }}" -R ${{ github.repository }} -p 'pacote.bin' -O t.bin
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:SENHA -in t.bin -out t.zip
+          unzip -q t.zip index.html
+      - id: p
+        run: |
+          python3 - <<'PY' >> $GITHUB_OUTPUT
+          import re, json
+          d = float(re.search(r'data-composition-id="main"[^>]*data-duration="([\d.]+)"', open('index.html').read()).group(1))
+          n = int("${{ inputs.partes }}"); passo = round(d / n)
+          cortes = [i * passo for i in range(n)] + [None]
+          print('blocos=' + json.dumps([{'i': i, 'de': cortes[i], 'ate': cortes[i + 1] or 0} for i in range(n)]))
+          PY
+  bloco:
+    needs: plano
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        b: ${{ fromJson(needs.plano.outputs.blocos) }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get update -q && sudo apt-get install -yq ffmpeg fonts-noto-color-emoji > /dev/null
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          SENHA: ${{ secrets.SENHA }}
+        run: |
+          gh release download "trabalho-${{ inputs.trabalho }}" -R ${{ github.repository }} -p 'pacote.bin' -O t.bin
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:SENHA -in t.bin -out t.zip
+          rm t.bin && mkdir p && cd p && unzip -q ../t.zip && rm ../t.zip
+      - name: Render do bloco
+        run: |
+          cd p
+          FIM=""; [ "${{ matrix.b.ate }}" != "0" ] && FIM="--end ${{ matrix.b.ate }}"
+          npx --yes hyperframes@${{ inputs.versao }} render . --start ${{ matrix.b.de }} $FIM -o ../bloco.mp4 --workers auto --quiet > /dev/null 2>&1 || { echo "render falhou"; exit 1; }
+      - name: Tranca o bloco
+        env:
+          SENHA: ${{ secrets.SENHA }}
+        run: openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:SENHA -in bloco.mp4 -out bloco_${{ matrix.b.i }}.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bloco-${{ matrix.b.i }}
+          path: bloco_${{ matrix.b.i }}.bin
+          retention-days: 2
+  juntar:
+    needs: bloco
+    runs-on: ubuntu-latest
+    steps:
+      - run: sudo apt-get update -q && sudo apt-get install -yq ffmpeg > /dev/null
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bloco-*
+          merge-multiple: true
+      - name: Destranca, junta e tranca de novo
+        env:
+          SENHA: ${{ secrets.SENHA }}
+        run: |
+          for f in bloco_*.bin; do openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:SENHA -in "$f" -out "${f%.bin}.mp4"; done
+          ls bloco_*.mp4 | sort -t_ -k2 -n | sed "s/.*/file '&'/" > lista.txt
+          ffmpeg -y -loglevel error -f concat -safe 0 -i lista.txt -c:v copy -c:a aac -b:a 192k -movflags +faststart video.mp4
+          ffprobe -v error -show_entries format=duration -of csv=p=0 video.mp4
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:SENHA -in video.mp4 -out video.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: video-${{ inputs.trabalho }}
+          path: video.bin
+          retention-days: 3
